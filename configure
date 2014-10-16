@@ -113,7 +113,7 @@ CFLAGS_AUTO=
 CFLAGS_MEMOPS=
 LDFLAGS_AUTO=
 OPTIMIZE_GLOBS=
-prefix=/usr/local/musl
+prefix=/usr/local
 exec_prefix='$(prefix)'
 bindir='$(exec_prefix)/bin'
 libdir='$(prefix)/lib'
@@ -123,7 +123,7 @@ target=
 optimize=auto
 debug=no
 warnings=no
-shared=auto
+shared=yes
 static=yes
 wrapper=auto
 

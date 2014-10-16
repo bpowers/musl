@@ -46,7 +46,7 @@ static struct {
 #define OVERHEAD (2*sizeof(size_t))
 #define MMAP_THRESHOLD (0x1c00*SIZE_ALIGN)
 #define DONTCARE 16
-#define RECLAIM 163840
+#define RECLAIM 2*PAGE_SIZE-1
 
 #define CHUNK_SIZE(c) ((c)->csize & -2)
 #define CHUNK_PSIZE(c) ((c)->psize & -2)
