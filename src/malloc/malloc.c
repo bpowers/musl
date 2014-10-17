@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <errno.h>
 #include <sys/mman.h>
-#include "libc.h"
+#include <pthread.h>
 #include "atomic.h"
 #include "pthread_impl.h"
 
@@ -25,7 +25,7 @@ struct chunk {
 };
 
 struct bin {
-	int lock[2];
+	pthread_mutex_t lock;
 	struct chunk *head;
 	struct chunk *tail;
 };
@@ -35,12 +35,12 @@ static struct {
 	size_t *heap;
 	uint64_t binmap;
 	struct bin bins[64];
-	int brk_lock[2];
-	int free_lock[2];
-	unsigned mmap_step;
+	pthread_mutex_t brk_lock;
+	pthread_mutex_t free_lock;
 } mal;
 
 
+#define PAGE_SIZE 4096
 #define SIZE_ALIGN (4*sizeof(size_t))
 #define SIZE_MASK (-SIZE_ALIGN)
 #define OVERHEAD (2*sizeof(size_t))
@@ -63,30 +63,26 @@ static struct {
 
 /* Synchronization tools */
 
-static inline void lock(volatile int *lk)
+static inline void lock(pthread_mutex_t *lk)
 {
-	if (libc.threads_minus_1)
-		while(a_swap(lk, 1)) __wait(lk, lk+1, 1, 1);
+	pthread_mutex_lock(lk);
 }
 
-static inline void unlock(volatile int *lk)
+static inline void unlock(pthread_mutex_t *lk)
 {
-	if (lk[0]) {
-		a_store(lk, 0);
-		if (lk[1]) __wake(lk, 1, 1);
-	}
+	pthread_mutex_unlock(lk);
 }
 
 static inline void lock_bin(int i)
 {
-	lock(mal.bins[i].lock);
+	pthread_mutex_lock(&mal.bins[i].lock);
 	if (!mal.bins[i].head)
 		mal.bins[i].head = mal.bins[i].tail = BIN_TO_CHUNK(i);
 }
 
 static inline void unlock_bin(int i)
 {
-	unlock(mal.bins[i].lock);
+	pthread_mutex_unlock(&mal.bins[i].lock);
 }
 
 static int first_set(uint64_t x)
@@ -156,49 +152,30 @@ static struct chunk *expand_heap(size_t n)
 {
 	struct chunk *w;
 	uintptr_t new;
+	size_t min = (size_t)2 << 23;
 
-	lock(mal.brk_lock);
+	lock(&mal.brk_lock);
 
-	if (n > SIZE_MAX - mal.brk - 2*PAGE_SIZE) goto fail;
-	new = mal.brk + n + SIZE_ALIGN + PAGE_SIZE - 1 & -PAGE_SIZE;
-	n = new - mal.brk;
+	// map 16 MB chunks at a time
+	n += -n & PAGE_SIZE-1;
+	if (n < min) n = min;
+	void *area = __mmap(0, n, PROT_READ|PROT_WRITE,
+			    MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+	if (area == MAP_FAILED) goto fail;
 
-	if (__brk(new) != new) {
-		size_t min = (size_t)PAGE_SIZE << mal.mmap_step/2;
-		n += -n & PAGE_SIZE-1;
-		if (n < min) n = min;
-		void *area = __mmap(0, n, PROT_READ|PROT_WRITE,
-			MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
-		if (area == MAP_FAILED) goto fail;
-
-		mal.mmap_step++;
-		area = (char *)area + SIZE_ALIGN - OVERHEAD;
-		w = area;
-		n -= SIZE_ALIGN;
-		w->psize = 0 | C_INUSE;
-		w->csize = n | C_INUSE;
-		w = NEXT_CHUNK(w);
-		w->psize = n | C_INUSE;
-		w->csize = 0 | C_INUSE;
-
-		unlock(mal.brk_lock);
-
-		return area;
-	}
-
-	w = MEM_TO_CHUNK(new);
+	area = (char *)area + SIZE_ALIGN - OVERHEAD;
+	w = area;
+	n -= SIZE_ALIGN;
+	w->psize = 0 | C_INUSE;
+	w->csize = n | C_INUSE;
+	w = NEXT_CHUNK(w);
 	w->psize = n | C_INUSE;
 	w->csize = 0 | C_INUSE;
 
-	w = MEM_TO_CHUNK(mal.brk);
-	w->csize = n | C_INUSE;
-	mal.brk = new;
-	
-	unlock(mal.brk_lock);
-
-	return w;
+	unlock(&mal.brk_lock);
+	return area;
 fail:
-	unlock(mal.brk_lock);
+	unlock(&mal.brk_lock);
 	errno = ENOMEM;
 	return 0;
 }
@@ -517,10 +494,10 @@ void free(void *p)
 			next->psize = final_size | C_INUSE;
 			i = bin_index(final_size);
 			lock_bin(i);
-			lock(mal.free_lock);
+			lock(&mal.free_lock);
 			if (self->psize & next->csize & C_INUSE)
 				break;
-			unlock(mal.free_lock);
+			unlock(&mal.free_lock);
 			unlock_bin(i);
 		}
 
@@ -543,7 +520,7 @@ void free(void *p)
 
 	self->csize = final_size;
 	next->psize = final_size;
-	unlock(mal.free_lock);
+	unlock(&mal.free_lock);
 
 	self->next = BIN_TO_CHUNK(i);
 	self->prev = mal.bins[i].tail;

@@ -18,7 +18,7 @@ syslibdir = /lib
 
 # only include sources required for the correct function of malloc,
 # realloc & free
-SRCS = $(sort $(wildcard src/process/*.c src/thread/*.c src/mman/*.c src/malloc/*.c arch/$(ARCH)/src/*.c)) src/internal/libc.c src/internal/syscall_ret.c
+SRCS = $(sort $(wildcard src/mman/*.c src/malloc/*.c arch/$(ARCH)/src/*.c)) src/internal/syscall_ret.c
 OBJS = $(SRCS:.c=.o) src/internal/$(ARCH)/syscall.o
 LOBJS = $(OBJS:.o=.lo)
 GENH = include/bits/alltypes.h
