@@ -272,7 +272,7 @@ static const double PIo2[] = {
 
 int __rem_pio2_large(double *x, double *y, int e0, int nx, int prec)
 {
-	int32_t jz,jx,jv,jp,jk,carry,n,iq[20],i,j,k,m,q0,ih;
+	int32_t jz,jx,jv,jp,jk,carry,n,iq[20],i,j,k,m,q0,ih,t;
 	double z,fw,f[20],fq[20],q[20];
 
 	/* initialize jk*/
@@ -366,12 +366,16 @@ recompute:
 
 	/* chop off zero terms */
 	if (z == 0.0) {
-		jz -= 1;
-		q0 -= 24;
-		while (iq[jz] == 0) {
-			jz--;
-			q0 -= 24;
-		}
+        t = jz;
+		// jz -= 1;
+		// q0 -= 24;
+		// while (iq[jz] == 0) {
+		// 	jz--;
+		// 	q0 -= 24;
+		// }
+        while (iq[--jz] == 0);
+        q0 -= (t - jz) * 24;
+
 	} else { /* break z into 24-bit if necessary */
 		z = scalbn(z,-q0);
 		if (z >= 0x1p24) {
@@ -402,40 +406,85 @@ recompute:
 	switch(prec) {
 	case 0:
 		fw = 0.0;
-		for (i=jz; i>=0; i--)
-			fw += fq[i];
+		for (i=jz; i>=0; fw += fq[i--]);
 		y[0] = ih==0 ? fw : -fw;
 		break;
 	case 1:
 	case 2:
 		fw = 0.0;
-		for (i=jz; i>=0; i--)
-			fw += fq[i];
+		for (i=jz; i>=0; fw += fq[i--]);
 		// TODO: drop excess precision here once double_t is used
 		fw = (double)fw;
 		y[0] = ih==0 ? fw : -fw;
 		fw = fq[0]-fw;
-		for (i=1; i<=jz; i++)
-			fw += fq[i];
+		for (i=1; i<=jz; fw += fq[i++]);
 		y[1] = ih==0 ? fw : -fw;
 		break;
 	case 3:  /* painful */
-		for (i=jz; i>0; i--) {
+		if (jz > 3) {
+			/*
+			* We need to process fq twice, but each subsequent item depends on previous one
+			* For example, we have jz = 10
+			* So, at first, we process items # (in pairs):
+			*   (10, 9)
+			*   (9, 8)
+			* Now we can run simple loop that will process those pairs independently:
+			*   (10, 9), (8, 7)
+			*   (9, 8), (7, 6)
+			*   (8, 7), (6, 5)
+			*   so on...
+			* This way, we can process each pair twice with only one loop
+			*/ 
+			i = jz;
+
 			fw      = fq[i-1]+fq[i];
 			fq[i]  += fq[i-1]-fw;
 			fq[i-1] = fw;
-		}
-		for (i=jz; i>1; i--) {
+
+			i--;
+
 			fw      = fq[i-1]+fq[i];
 			fq[i]  += fq[i-1]-fw;
 			fq[i-1] = fw;
+
+			for (i = jz; i>3; i--) {
+				fw      = fq[i-1]+fq[i];
+				fq[i]  += fq[i-1]-fw;
+				fq[i-1] = fw;
+
+				fw       = fq[i-3]+fq[i-2];
+				fq[i-2] += fq[i-3]-fw;
+				fq[i-3]  = fw;
+			}
+
+			i++;
+
+			fw      = fq[i-1]+fq[i];
+			fq[i]  += fq[i-1]-fw;
+			fq[i-1] = fw;
+		} else {
+			for (i=jz; i>0; i--) {
+				fw      = fq[i-1]+fq[i];
+				fq[i]  += fq[i-1]-fw;
+				fq[i-1] = fw;
+			}
+			for (i=jz; i>1; i--) {
+				fw      = fq[i-1]+fq[i];
+				fq[i]  += fq[i-1]-fw;
+				fq[i-1] = fw;
+			}
 		}
+
 		for (fw=0.0,i=jz; i>=2; i--)
 			fw += fq[i];
 		if (ih==0) {
-			y[0] =  fq[0]; y[1] =  fq[1]; y[2] =  fw;
+			y[0] =  fq[0];
+			y[1] =  fq[1];
+			y[2] =  fw;
 		} else {
-			y[0] = -fq[0]; y[1] = -fq[1]; y[2] = -fw;
+			y[0] = -fq[0];
+			y[1] = -fq[1];
+			y[2] = -fw;
 		}
 	}
 	return n&7;
